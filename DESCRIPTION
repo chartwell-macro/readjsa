@@ -1,0 +1,31 @@
+Package: readjsa
+Title: Hardened Access to Jobs and Skills Australia Data
+Version: 0.1.0
+Authors@R: c(
+    person("Matt", "Cowgill", role = "aut",
+           comment = "Original readjsa 0.0.1 implementation"),
+    person("Chartwell", "Macro", role = c("aut", "cre"),
+           email = "chartwellmacro@gmail.com"))
+Description: Discovers, downloads, verifies, caches, and parses official
+    Internet Vacancy Index, Recruitment Experiences and Outlook Survey, and
+    Small Area Labour Markets releases. Raw-file provenance, release vintage,
+    classifications, revisions, and source terms remain attached to every
+    observation.
+License: MIT + file LICENSE
+URL: https://github.com/chartwell-macro/readjsa
+BugReports: https://github.com/chartwell-macro/readjsa/issues
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.3
+Depends: R (>= 4.1.0)
+Imports:
+    curl,
+    digest,
+    readr,
+    readxl,
+    xml2
+Suggests:
+    ps,
+    testthat (>= 3.0.0),
+    writexl
+Config/testthat/edition: 3

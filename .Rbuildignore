@@ -1,0 +1,5 @@
+^\.git$
+^\.gitignore$
+^\.Rcheck$
+^readjsa[.]Rcheck$
+^readjsa_.*[.]tar[.]gz$
