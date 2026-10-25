@@ -1,0 +1,52 @@
+url: https://chartwell-macro.github.io/readjsa
+
+template:
+  bootstrap: 5
+
+home:
+  title: Reproducible access to Jobs and Skills Australia data
+  description: >
+    Discover, verify, cache, and parse official Internet Vacancy Index,
+    Recruitment Experiences and Outlook Survey, and Small Area Labour Markets
+    releases.
+  links:
+    - text: Source repository
+      href: https://github.com/chartwell-macro/readjsa
+    - text: Report an issue
+      href: mailto:chartwellmacro@gmail.com
+
+reference:
+  - title: Discover and verify releases
+    contents:
+      - discover_jsa_releases
+      - fetch_jsa_release
+      - jsa_release_manifest
+      - jsa_cache_dir
+  - title: Internet Vacancy Index
+    contents:
+      - read_ivi
+      - read_ivi_file
+  - title: Recruitment Experiences and Outlook Survey
+    contents:
+      - read_reos
+      - read_reos_file
+  - title: Small Area Labour Markets
+    contents:
+      - read_salm
+      - read_salm_file
+
+articles:
+  - title: User guides
+    contents:
+      - getting-started
+      - source-families
+      - reproducibility-and-cache
+      - troubleshooting
+
+navbar:
+  structure:
+    left: [reference, articles, news]
+    right: [github]
+
+news:
+  one_page: true

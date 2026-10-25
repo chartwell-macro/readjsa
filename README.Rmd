@@ -1,0 +1,260 @@
+---
+title: "readjsa"
+output:
+  github_document:
+    toc: false
+    html_preview: false
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  comment = "#>",
+  collapse = TRUE,
+  fig.path = "man/figures/README-",
+  fig.width = 9,
+  fig.height = 5.4,
+  out.width = "100%",
+  warning = FALSE,
+  message = FALSE
+)
+
+library(readjsa)
+```
+
+[![R >= 4.1](https://img.shields.io/badge/R-%E2%89%A5%204.1-276DC3.svg)](https://www.r-project.org/)
+[![MIT licence](https://img.shields.io/badge/licence-MIT-blue.svg)](https://opensource.org/license/mit)
+
+`readjsa` turns official labour-market releases from [Jobs and Skills Australia (JSA)](https://www.jobsandskills.gov.au/) and the [Department of Employment and Workplace Relations (DEWR)](https://www.dewr.gov.au/) into auditable, long-form R data. It discovers published releases, verifies and caches exact raw files, and parses supported workbook and CSV families into base `data.frame`s while retaining release, classification, revision, licence and source-hash provenance.
+
+Use the high-level readers for a current verified release and the `*_file()` readers for saved files, reports, tests and offline work. The package focuses on faithful data access and provenance; forecasting, statistical modelling and interpretation remain downstream tasks guided by the publishers' definitions.
+
+## Status and installation
+
+`readjsa` 0.1.0 is a development release on GitHub. It is not currently available from CRAN, so the CRAN command below is intentionally aspirational and should only be used after a CRAN release has been accepted.
+
+```r
+# Current development version from GitHub.
+# The repository may require a GitHub-authenticated session.
+pak::pak("chartwell-macro/readjsa")
+
+# After a CRAN release has been accepted:
+# install.packages("readjsa")
+```
+
+The data endpoints used by `readjsa` are public. GitHub authentication, when needed, is only for installing the repository; the package does not accept or store JSA/DEWR credentials.
+
+## Supported sources and workflows
+
+| Official source | Current-release reader | Saved/offline reader | Main selections |
+|:--|:--|:--|:--|
+| Internet Vacancy Index (JSA) | `read_ivi()` | `read_ivi_file()` | Six IVI families: skill level/states, ANZSCO2/ANZSCO4 by states, IVI regions, GCCSA/SA4, and JSA Remoteness/Northern Australia |
+| Recruitment Experiences and Outlook Survey (JSA) | `read_reos()` | `read_reos_file()` | Every table declared by the workbook `Information` sheet, or selected table IDs such as `"1.1"` |
+| Small Area Labour Markets (DEWR) | `read_salm()` | `read_salm_file()` | Smoothed `"sa2"` and `"lga"` releases, with quarter-end dates and the publisher-stated ASGS vintage |
+
+Use `jsa_release_manifest()` to inspect the supported families before selecting a release. `discover_jsa_releases()` reads the official publication pages rather than guessing dated file URLs.
+
+## Scope and limitations
+
+`readjsa` focuses on the IVI, REOS and SALM publication families listed above. Strict discovery and schema validation fail closed when a publisher page is incomplete or a file layout drifts, keeping source changes visible. Classifications remain release-specific, and later SALM releases can revise historical observations. Large selections can materialise millions of rows, so begin with one IVI family, one SALM geography or selected REOS tables. Live readers require HTTPS access to approved JSA/DEWR endpoints; saved official files and installed examples support deterministic offline work.
+
+## Start with a deterministic local read
+
+The following example exercises the real IVI parser without a network call. The small fixture is packaged under `inst/extdata` and is intended for deterministic examples and tests; it contains no copied production observations.
+
+```{r first-success}
+ivi_path <- system.file(
+  "extdata", "ivi_skill_states.xlsx", package = "readjsa"
+)
+if (!nzchar(ivi_path)) {
+  ivi_path <- file.path("inst", "extdata", "ivi_skill_states.xlsx")
+}
+ivi <- read_ivi_file(
+  ivi_path,
+  family = "skill_states"
+)
+
+ivi[
+  seq_len(min(4L, nrow(ivi))),
+  c("date", "value", "occupation_code", "state", "observation_status")
+]
+```
+
+This is the smallest successful workflow. The fixture is synthetic and exists only to demonstrate the parser schema. The [Getting Started article](https://chartwell-macro.github.io/readjsa/articles/getting-started.html) extends the same offline pattern across IVI, REOS and SALM, including statuses, units and provenance.
+
+## Retrieve and chart a time series
+
+This live workflow discovers the current IVI catalogue, selects the skill-level/states release, downloads and verifies its workbook, and parses it through the cache. Omitting `release` from `read_ivi()` performs the same discovery internally; selecting the row explicitly makes the source choice visible.
+
+```{r live-chart-path, eval=FALSE}
+catalogue <- discover_jsa_releases("ivi")
+release <- catalogue[
+  catalogue$family_id == "skill_states",
+  ,
+  drop = FALSE
+]
+ivi <- read_ivi(tables = "skill_states", release = release)
+```
+
+The rendered example below follows that public code path offline. It discovers the pinned catalogue fixture and replays an exact, installed June 2026 JSA workbook through `read_ivi()` with a local transport, so documentation builds do not depend on the network.
+
+```{r pinned-chart-replay, include=FALSE}
+snapshot_name <- "ivi_skill_states_2026-06.xlsx"
+snapshot_path <- system.file(
+  "extdata", "official", snapshot_name, package = "readjsa"
+)
+if (!nzchar(snapshot_path)) {
+  snapshot_path <- file.path("inst", "extdata", "official", snapshot_name)
+}
+stopifnot(file.exists(snapshot_path))
+
+ivi_html <- system.file("extdata", "ivi.html", package = "readjsa")
+if (!nzchar(ivi_html)) {
+  ivi_html <- file.path("inst", "extdata", "ivi.html")
+}
+catalogue <- discover_jsa_releases("ivi", html = ivi_html)
+release <- catalogue[
+  catalogue$family_id == "skill_states",
+  ,
+  drop = FALSE
+]
+snapshot_transport <- function(url, destination, timeout, max_bytes) {
+  bytes <- file.info(snapshot_path)$size
+  if (is.na(bytes) || bytes > max_bytes) {
+    stop("The installed snapshot exceeds the configured byte limit.")
+  }
+  if (!file.copy(snapshot_path, destination, overwrite = TRUE)) {
+    stop("Could not replay the installed IVI snapshot.")
+  }
+  url
+}
+chart_cache <- tempfile("readjsa-readme-cache-")
+ivi <- read_ivi(
+  tables = "skill_states",
+  release = release,
+  cache_dir = chart_cache,
+  transport = snapshot_transport
+)
+unlink(chart_cache, recursive = TRUE)
+```
+
+The parser already returns long-form observations. Base subsetting selects the published trend totals for three states; `value` remains the publisher-reported advertisement count.
+
+```{r retrieve-and-chart, fig.width=8, fig.height=5.8, fig.alt="Monthly Internet Vacancy Index trend for New South Wales, Victoria and Queensland from January 2019 to June 2026"}
+chart_data <- ivi[
+  ivi$series_type == "trend" &
+    ivi$measure == "online_job_advertisements" &
+    ivi$skill_level == "0" &
+    ivi$state %in% c("NSW", "VIC", "QLD") &
+    ivi$date >= as.Date("2019-01-01") &
+    ivi$observation_status == "published",
+  ,
+  drop = FALSE
+]
+
+if (requireNamespace("ggplot2", quietly = TRUE)) {
+  ggplot2::ggplot(
+    chart_data,
+    ggplot2::aes(x = date, y = value, colour = state)
+  ) +
+    ggplot2::geom_line() +
+    ggplot2::labs(
+      title = "Internet Vacancy Index trend by state",
+      subtitle = "Monthly published observations",
+      x = "Month",
+      y = "Online job advertisements",
+      colour = "State or territory",
+      caption = "Source: Jobs and Skills Australia, Internet Vacancy Index."
+    ) +
+    ggplot2::theme_minimal(base_size = 13)
+}
+```
+
+The rendered series comes from *Internet Vacancies, ANZSCO Skill Level, States and Territories — June 2026*, reference period 2026-06 and released 22 July 2026. The installed workbook is an exact 440,452-byte copy with SHA-256 `5bacad1cf2fbef22b1f802e3fc3d8c5051038c31ff5839a2af7e8db10e8185fd`; its [official source](https://www.jobsandskills.gov.au/sites/default/files/2026-07/internet_vacancies_anzsco_skill_level_states_and_territories_-_june_2026.xlsx), [publication page](https://www.jobsandskills.gov.au/data/internet-vacancy-index) and [reuse terms](https://www.jobsandskills.gov.au/copyright-and-disclaimer) are recorded with the fixture. Data attribution: © Commonwealth of Australia; CC BY 4.0 subject to the publisher's stated exclusions. The [Getting Started article](https://chartwell-macro.github.io/readjsa/articles/getting-started.html#retrieve-and-chart-a-time-series) shows the complete deterministic replay.
+
+## Common workflows
+
+### Read other current releases
+
+The high-level readers apply the same discover, verify, cache and parse sequence to REOS and SALM. Select the smallest family or table set needed for the analysis.
+
+```r
+reos <- read_reos(tables = c("1.1", "3.3"))
+salm <- read_salm(geography = "sa2")
+```
+
+The IVI reader also accepts the legacy upstream aliases `"skill"`, `"4dig"`, `"2dig_states"` and `"2dig_regions"`; canonical family IDs from `jsa_release_manifest()` are preferred in new code.
+
+### Parse a saved official file
+
+Use the local readers for a file obtained through an approved workflow, a historical release or a fully offline analysis. They apply the same publisher-shaped schema checks and make changed or incomplete layouts visible.
+
+```r
+snapshot <- system.file(
+  "extdata", "official",
+  "ivi_skill_states_2026-06.xlsx",
+  package = "readjsa"
+)
+ivi_local <- read_ivi_file(snapshot, family = "skill_states")
+```
+
+## Output contract
+
+Every reader returns a base `data.frame`. `date` and release-period fields are `Date`s; `retrieved_at` is a UTC `POSIXct`; observation values are numeric; `raw_value`, status and source metadata are retained as character fields where appropriate. The source-specific observation columns are:
+
+- **IVI:** `date`, `value`, `observation_status`, `raw_value`, `series_type`, `measure`, `unit`, `unit_multiplier`, `frequency`, `seasonal_adjustment`, occupation fields (`occupation_level`, `occupation_code`, `occupation_title`, `skill_level`), and geography fields (`state`, `geography_type`, `geography_code`, `geography_name`).
+- **REOS:** `date`, `table`, `series`, `frequency`, `unit`, `unit_multiplier`, `seasonal_adjustment`, `disaggregation_group`, `disaggregation`, `table_title`, `table_definition`, `table_notes`, `value`, `observation_status` and `raw_value`.
+- **SALM:** `date`, `geography_type`, `geography_code`, `geography_name`, `data_item`, `unit`, `unit_multiplier`, `frequency`, `seasonal_adjustment`, `value`, `observation_status` and `raw_value`.
+
+Family-specific metadata remains explicit between those observation columns and the common provenance block. This includes `classification_version` for all families, IVI and SALM `file_notes`, and REOS `workbook_notes`; REOS table definitions and notes are also retained in its observation block.
+
+All readers return the common provenance fields `provider_id`, `dataset_id`, `family_id`, `release_id`, `reference_period`, `release_date`, `vintage_date`, `page_modified_date`, `retrieved_at`, `source_url`, `final_url`, `source_filename`, `page_url`, `raw_bytes`, `raw_sha256`, `parser_version`, `schema_version`, `revision_policy`, `terms_url`, `licence` and `attribution`. High-level readers populate these from verified release metadata. Local-file readers populate fields supplied through `provenance`; release-specific fields otherwise remain `NA` rather than being inferred.
+
+Published value semantics remain explicit:
+
+- REOS percentages are canonical decimal proportions (`49%*` becomes `0.49`) and retain `raw_value` and a `flagged` status.
+- SALM quarter labels become quarter-end dates. Publisher dashes remain missing numeric values with `observation_status = "unavailable"`; `n.p.` and other publication statuses are retained.
+- IVI suppression, flags and missing values remain explicit in `observation_status` and `raw_value`.
+- SALM's `revision_policy` states that later releases can revise historical series when benchmarks or geography classifications change. Historical ASGS labels are retained, not silently relabelled.
+
+## Network and cache behavior
+
+Live discovery and downloads use HTTPS and validate the initial and final URLs against the official JSA/DEWR host allowlist. The transport follows HTTPS redirects; intermediate redirect hosts are not independently validated. `fetch_jsa_release()` downloads to a temporary file, applies timeout and retry settings, checks the received file against the configured size limit, computes the exact SHA-256, then replaces the raw file and metadata under a per-release writer lock and validates the complete pair before use. Cache hits are re-hashed and checked against the full release identity, parser version, schema version, age and byte limits before reuse.
+
+The default cache is returned by `jsa_cache_dir()` (`tools::R_user_dir("readjsa", "cache")`). Supply `cache_dir` explicitly for a project or CI cache, and save the selected catalogue row together with `raw_sha256` when you need an auditable replay identity. `force = TRUE` replaces a valid cache entry. Stale entries and readable metadata with a mismatched hash or identity are repaired by downloading again; unreadable RDS metadata raises `readjsa_cache_error`, after which an explicit `force = TRUE` call replaces it. `max_bytes`, `max_age`, `max_files`, `max_cache_bytes`, `retries` and `lock_timeout` are available on `fetch_jsa_release()` for bounded workflows.
+
+For diagnostics, setting `READJSA_MEASUREMENT_CACHE_AUDIT=true` adds a logical `readjsa_raw_cache_hits` attribute to a high-level reader result, with one observed raw-cache outcome per fetched release. The attribute is opt-in and does not change columns or ordinary results.
+
+Installation performs no downloads and stores no credentials. Default requests require approved initial and final HTTPS URLs; local-file readers provide the supported offline path.
+
+## Troubleshooting
+
+- A transport error usually means the public page or file was unavailable, ended at a final URL outside the approved hosts, exceeded a configured bound or timed out. Retry later or use a saved official file with a local reader.
+- A cache warning means readable metadata or raw bytes no longer match the release identity; allow `fetch_jsa_release()` to repair it, or choose an isolated `cache_dir`. An unreadable metadata error requires an explicit retry with `force = TRUE`.
+- A `readjsa_schema_error` indicates a malformed file or publisher schema drift. Keep the offending release filename, `source_url`, package version and error text when emailing a report to chartwellmacro@gmail.com.
+
+For a reproducible bug report, include `sessionInfo()`, the dataset/family, release ID, parser/schema versions and the error class/message. Keep credentials and unapproved raw data out of issue attachments. The [Troubleshooting article](https://chartwell-macro.github.io/readjsa/articles/troubleshooting.html) demonstrates the main error classes and recovery paths.
+
+## Guides
+
+- [Getting Started](https://chartwell-macro.github.io/readjsa/articles/getting-started.html) — a complete offline-first workflow and the pinned chart replay.
+- [Choosing a source family](https://chartwell-macro.github.io/readjsa/articles/source-families.html) — family IDs, selections and discovery.
+- [Reproducible reads and cache](https://chartwell-macro.github.io/readjsa/articles/reproducibility-and-cache.html) — cache identity, replay and audit fields.
+- [Troubleshooting](https://chartwell-macro.github.io/readjsa/articles/troubleshooting.html) — failure classes and diagnosis.
+
+## Citation, licensing and upstream provenance
+
+The primary package author and maintainer is Chartwell Macro. Use `citation("readjsa")` for the package citation; GitHub also reads the repository's [`CITATION.cff`](https://github.com/chartwell-macro/readjsa/blob/HEAD/CITATION.cff). Until a CRAN release supplies a DOI, include the package version, GitHub repository and commit SHA used by your analysis. Also cite the official JSA or DEWR release page represented by the returned `page_url`/`source_url` fields, using a release-specific row when one is available.
+
+The current fork's package-code contributions are MIT licensed and copyright Chartwell Macro (`LICENSE`; the repository also carries the full text in `LICENSE.md`). Inherited portions retain the exact upstream 2024 MIT notice preserved in [`inst/UPSTREAM_LICENSE.md`](https://github.com/chartwell-macro/readjsa/blob/HEAD/inst/UPSTREAM_LICENSE.md) and described in [`inst/UPSTREAM.md`](https://github.com/chartwell-macro/readjsa/blob/HEAD/inst/UPSTREAM.md). Official data and publications remain subject to their publishers' terms and attribution—not the package copyright—and every parsed release retains `terms_url`, `licence` and `attribution` fields for downstream notices. This repository is a hardened derivative of Matt Cowgill's `readjsa` 0.0.1 client.
+
+## Contributing and support
+
+Please email [chartwellmacro@gmail.com](mailto:chartwellmacro@gmail.com) for a reproducible bug or a publisher schema change, and use [pull requests](https://github.com/chartwell-macro/readjsa/pulls) for proposed fixes. Keep changes source-grounded, preserve the offline tests, and describe any change to output columns, provenance, release discovery or cache behavior. The repository's [NEWS](https://github.com/chartwell-macro/readjsa/blob/HEAD/NEWS.md) records user-visible changes.
+
+```{r manifest-preview}
+manifest <- jsa_release_manifest()
+manifest[, c("dataset_id", "family_id", "classification_version")]
+```
+
+Browse the generated Reference section for detailed function help, or open the installed package's help index from R.

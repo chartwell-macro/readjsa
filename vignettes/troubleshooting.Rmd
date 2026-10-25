@@ -1,0 +1,140 @@
+---
+title: "Troubleshooting readjsa reads"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Troubleshooting readjsa reads}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  prompt = FALSE
+)
+library(readjsa)
+
+fixture <- function(name) {
+  installed <- system.file("extdata", name, package = "readjsa")
+  candidates <- c(
+    installed,
+    file.path("..", "inst", "extdata", name),
+    file.path("inst", "extdata", name)
+  )
+  path <- candidates[nzchar(candidates) & file.exists(candidates)]
+  if (!length(path)) stop("The packaged fixture is missing: ", name)
+  path[[1L]]
+}
+
+capture_error <- function(expr) {
+  tryCatch(
+    force(expr),
+    error = function(error) {
+      data.frame(
+        class = class(error)[[1L]],
+        message = conditionMessage(error),
+        stringsAsFactors = FALSE
+      )
+    }
+  )
+}
+```
+
+`readjsa` fails closed when a source cannot be identified or no longer matches
+the supported schema. This is preferable to returning plausible-looking data
+with the wrong family, geography, vintage, or unit. The examples below use
+only the packaged fixtures, so they are safe to run without network access.
+
+## Check the file and family first
+
+The local readers validate the extension before opening a file. A CSV passed to
+the IVI reader is a `readjsa_file_error`; it is not interpreted as a workbook.
+
+```{r wrong-extension}
+capture_error(
+  read_ivi_file(fixture("salm_sa2.csv"), family = "skill_states")
+)
+```
+
+A file can also be valid in general but incompatible with the selected family.
+For example, an SA2 CSV is not an LGA release: its preamble and identifier
+headers state a different geography and ASGS context.
+
+```{r wrong-geography}
+capture_error(
+  read_salm_file(fixture("salm_sa2.csv"), geography = "lga")
+)
+```
+
+Use `jsa_release_manifest()` to inspect supported family IDs, and pass the
+family/geography that matches the file. Do not infer an IVI family from a
+filename if the workbook's sheet layout is available.
+
+## Understand publication statuses
+
+An unavailable or not-published token is not an ordinary numeric zero. SALM
+retains the token in `raw_value`, sets `value` to `NA`, and records the reason
+in `observation_status`.
+
+```{r statuses}
+salm <- read_salm_file(fixture("salm_sa2.csv"), geography = "sa2")
+salm[salm$observation_status != "published", c(
+  "date", "geography_code", "data_item", "value",
+  "observation_status", "raw_value"
+)]
+```
+
+REOS percentage values are canonical decimal proportions. IVI and SALM values
+retain their declared units in `unit` and `unit_multiplier`. Always use those
+fields when combining families or presenting a chart.
+
+## Diagnose discovery failures offline
+
+Discovery errors commonly mean that a publication page has gained an
+unclassified link, has lost one of the expected current families, or no longer
+contains a parseable reference period. With a local page, the same validation
+can be inspected without a network call:
+
+```{r discovery-error}
+capture_error(
+  discover_jsa_releases("ivi", html = fixture("reos.html"))
+)
+```
+
+The error class `readjsa_discovery_error` identifies a catalogue problem. On a
+live page, check the publisher's page manually and preserve the exact URL and
+release date before retrying. `strict = TRUE` (the default) refuses partial or
+ambiguous catalogues; it should not be disabled merely to make a pipeline
+continue with an unknown family.
+
+## Network and cache failures
+
+The network-enabled readers require approved initial and final HTTPS URLs,
+apply timeouts, retries, and received-file-size checks, and use a user cache.
+They do not require a credential. A `readjsa_transport_error` usually indicates
+an HTTP or transport failure; a `readjsa_size_error` indicates a configured
+size bound; and a
+`readjsa_cache_error` indicates a lock, metadata, or final verification
+failure. For an offline run, use the local `*_file()` readers and a saved raw
+file instead of repeatedly retrying a network call.
+
+The cache can be inspected with `jsa_cache_dir()`. It is safe to remove an
+invalid cache entry and fetch the saved catalogue row again, but keep the raw
+file and complete `raw_sha256` when an audit trail matters. The
+[reproducibility and cache](reproducibility-and-cache.html) article shows a
+temporary offline cache replay.
+
+## Provenance and changed releases
+
+`readjsa_provenance_error` means that release metadata conflicts with the exact
+file: for example, the latest observation date does not match the declared
+reference period, or a supplied hash does not match the bytes. Treat this as a
+real data-integrity signal. Do not overwrite provenance columns to silence it;
+re-check that the source file, catalogue row, and family selection belong
+together.
+
+Finally, report the package version, dataset/family, source filename, reference
+period, and complete `raw_sha256` when emailing a report to chartwellmacro@gmail.com. That information lets
+another user distinguish a changed publisher release from a local file or
+environment problem.

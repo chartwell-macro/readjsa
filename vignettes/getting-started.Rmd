@@ -1,0 +1,288 @@
+---
+title: "Getting started with readjsa"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Getting started with readjsa}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  prompt = FALSE
+)
+library(readjsa)
+
+fixture <- function(name) {
+  installed <- system.file("extdata", name, package = "readjsa")
+  candidates <- c(
+    installed,
+    file.path("..", "inst", "extdata", name),
+    file.path("inst", "extdata", name)
+  )
+  path <- candidates[nzchar(candidates) & file.exists(candidates)]
+  if (!length(path)) stop("The packaged fixture is missing: ", name)
+  path[[1L]]
+}
+
+ivi_path <- fixture("ivi_skill_states.xlsx")
+reos_path <- fixture("reos_current.xlsx")
+salm_path <- fixture("salm_sa2.csv")
+```
+
+`readjsa` provides a small, explicit surface for three official publication
+families from Jobs and Skills Australia (JSA) and the Department of
+Employment and Workplace Relations (DEWR): the Internet Vacancy Index (IVI),
+the Recruitment Experiences and Outlook Survey (REOS), and Small Area Labour
+Markets (SALM). The package has two complementary paths:
+
+* `read_ivi()`, `read_reos()`, and `read_salm()` discover a current official
+  release, download it over HTTPS, verify it, cache the exact bytes, and parse
+  it.
+* `read_ivi_file()`, `read_reos_file()`, and `read_salm_file()` parse one
+  local workbook or CSV with the same schema checks. The local path is the
+  deterministic choice for a report, a test, or an offline environment.
+
+This article begins with the second path, then replays the first path from a
+pinned official workbook. The files directly under `inst/extdata/` are small,
+deterministic **schema fixtures** maintained for package examples and tests;
+they are not extracts of current production observations. The separate
+`inst/extdata/official/` directory contains the provenance-documented official
+snapshot used for the chart.
+
+## Parse one file from each family
+
+The first successful workflow is to locate a packaged fixture and pass it to
+the family-specific local reader. A family must be supplied for IVI because a
+release contains multiple workbook layouts. SALM requires a geography, and
+REOS can select one or more workbook tables.
+
+```{r parse-fixtures}
+ivi <- read_ivi_file(ivi_path, family = "skill_states")
+reos <- read_reos_file(reos_path, tables = c("1.1", "3.3"))
+salm <- read_salm_file(salm_path, geography = "sa2")
+
+data.frame(
+  dataset = c("IVI", "REOS", "SALM"),
+  rows = c(nrow(ivi), nrow(reos), nrow(salm)),
+  first_date = c(min(ivi$date), min(reos$date), min(salm$date)),
+  last_date = c(max(ivi$date), max(reos$date), max(salm$date)),
+  stringsAsFactors = FALSE
+)
+```
+
+Each result is a base `data.frame`. Observation columns are followed by
+family metadata such as classification and workbook/file notes, then by the
+provenance columns repeated on every row. The common fields
+`date`, `value`, `observation_status`, and `raw_value` make it possible to
+write family-independent checks, while fields such as `occupation_code`,
+`table`, or `data_item` retain the source-specific dimensions.
+
+```{r inspect-output}
+ivi[c(
+  "date", "value", "observation_status", "series_type",
+  "occupation_title", "state", "family_id", "source_filename"
+)]
+```
+
+Dates are returned as `Date` values. Numeric values are canonicalised to
+`value`, and the unmodified token is retained in `raw_value`. A status other
+than `"published"` is meaningful: for example, SALM uses
+`"unavailable"` for a publisher dash and `"not_published"` for `n.p.`. The
+parser does not silently turn those publication states into ordinary zeros.
+
+```{r status-example}
+salm[salm$observation_status != "published", c(
+  "date", "geography_code", "data_item", "value",
+  "observation_status", "raw_value"
+)]
+```
+
+REOS percentages are represented as decimal proportions (for example,
+`0.50`, not `50`). The `unit` and `unit_multiplier` columns make that choice
+explicit and are retained alongside the source labels.
+
+```{r reos-contract}
+reos[c("table", "date", "value", "unit", "frequency", "seasonal_adjustment")]
+```
+
+## Retrieve and chart a time series
+
+For a current release, discover the IVI catalogue, select the skill-level/state
+workbook, retrieve it through `read_ivi()`, and use ordinary base subsetting to
+prepare the chart data.
+
+```{r official-time-series-live, eval=FALSE}
+catalogue <- discover_jsa_releases("ivi")
+release <- catalogue[catalogue$family_id == "skill_states", , drop = FALSE]
+ivi <- read_ivi(tables = "skill_states", release = release)
+
+chart_data <- ivi[
+  ivi$series_type == "trend" &
+    ivi$measure == "online_job_advertisements" &
+    ivi$skill_level == "0" &
+    ivi$observation_status == "published" &
+    ivi$state %in% c("NSW", "VIC", "QLD") &
+    ivi$date >= as.Date("2019-01-01"),
+  ,
+  drop = FALSE
+]
+```
+
+The rendered figure uses the installed June 2026 JSA workbook so the article
+builds without network access. This is a pinned snapshot, not the current
+publisher release: 440,452 bytes, SHA-256
+`5bacad1cf2fbef22b1f802e3fc3d8c5051038c31ff5839a2af7e8db10e8185fd`,
+released 22 July 2026. Attribution is © Commonwealth of Australia; reuse is
+CC BY 4.0 subject to the publisher's stated exclusions. The hidden setup below
+uses the same public discover/select/fetch/cache/parse path with a local
+copying transport.
+
+```{r official-time-series-replay, include=FALSE}
+official_snapshot_name <- "ivi_skill_states_2026-06.xlsx"
+official_snapshot <- fixture(file.path("official", official_snapshot_name))
+ivi_html <- fixture("ivi.html")
+
+official_catalogue <- discover_jsa_releases("ivi", html = ivi_html)
+official_release <- official_catalogue[
+  official_catalogue$family_id == "skill_states", , drop = FALSE
+]
+stopifnot(nrow(official_release) == 1L)
+
+transport_calls <- 0L
+snapshot_transport <- function(url, destination, timeout, max_bytes) {
+  transport_calls <<- transport_calls + 1L
+  bytes <- file.info(official_snapshot)$size
+  stopifnot(!is.na(bytes), bytes > 0, bytes <= max_bytes)
+  stopifnot(file.copy(official_snapshot, destination, overwrite = TRUE))
+  invisible(url)
+}
+
+chart_cache <- tempfile("readjsa-official-cache-")
+first_read <- read_ivi(
+  tables = "skill_states",
+  release = official_release,
+  cache_dir = chart_cache,
+  transport = snapshot_transport
+)
+ivi <- read_ivi(
+  tables = "skill_states",
+  release = official_release,
+  cache_dir = chart_cache,
+  transport = snapshot_transport
+)
+stopifnot(
+  identical(transport_calls, 1L),
+  identical(first_read, ivi)
+)
+unlink(chart_cache, recursive = TRUE)
+
+chart_data <- ivi[
+  ivi$series_type == "trend" &
+    ivi$measure == "online_job_advertisements" &
+    ivi$skill_level == "0" &
+    ivi$observation_status == "published" &
+    ivi$state %in% c("NSW", "VIC", "QLD") &
+    ivi$date >= as.Date("2019-01-01"),
+  ,
+  drop = FALSE
+]
+stopifnot(
+  nrow(chart_data) > 0L,
+  inherits(chart_data$date, "Date"),
+  is.numeric(chart_data$value),
+  !anyDuplicated(chart_data[c("date", "state")]),
+  all(chart_data$state %in% c("NSW", "VIC", "QLD")),
+  all(chart_data$series_type == "trend"),
+  all(chart_data$skill_level == "0"),
+  all(chart_data$observation_status == "published")
+)
+
+snapshot_metadata <- unique(chart_data[
+  ,
+  c(
+    "source_url", "terms_url", "raw_sha256", "raw_bytes", "release_date",
+    "licence", "attribution"
+  ),
+  drop = FALSE
+])
+stopifnot(
+  nrow(snapshot_metadata) == 1L,
+  identical(
+    snapshot_metadata$raw_sha256[[1L]],
+    "5bacad1cf2fbef22b1f802e3fc3d8c5051038c31ff5839a2af7e8db10e8185fd"
+  ),
+  identical(as.numeric(snapshot_metadata$raw_bytes[[1L]]), 440452),
+  identical(as.character(snapshot_metadata$release_date[[1L]]), "2026-07-22"),
+  identical(
+    snapshot_metadata$licence[[1L]],
+    "CC BY 4.0 subject to stated exclusions"
+  ),
+  identical(snapshot_metadata$attribution[[1L]], "© Commonwealth of Australia")
+)
+```
+
+The plot can now use the returned `date`, `value`, and `state` columns directly.
+
+```{r official-time-series-chart, fig.width=8, fig.height=5.8, fig.align="center", out.width="100%", fig.alt="Monthly Internet Vacancy Index trend for New South Wales, Victoria and Queensland from January 2019 to June 2026"}
+if (requireNamespace("ggplot2", quietly = TRUE)) {
+  print(
+    ggplot2::ggplot(
+      chart_data,
+      ggplot2::aes(x = date, y = value, colour = state)
+    ) +
+      ggplot2::geom_line() +
+      ggplot2::labs(
+        title = "Internet Vacancy Index trend by state",
+        subtitle = "Monthly published observations",
+        x = "Month",
+        y = "Online job advertisements",
+        colour = "State or territory",
+        caption = "Source: Jobs and Skills Australia, Internet Vacancy Index."
+      ) +
+      ggplot2::theme_minimal(base_size = 13)
+  )
+}
+```
+
+The parsed data retain the exact source URL, terms URL, hash, byte count,
+release date, licence, and attribution used to verify the rendered snapshot.
+For live work, use the visible retrieval code above; the local transport is
+only a deterministic documentation safeguard.
+
+## Read current releases when network access is available
+
+The network-enabled readers are intentionally explicit about their source
+families. For example, `read_ivi("skill_states")` discovers the official IVI
+catalogue and then reads that family; `read_reos(tables = c("1.1", "3.3"))`
+selects workbook tables; and `read_salm("sa2")` selects the SA2 release. These
+calls require HTTPS access to the publisher pages and files, and can create
+or reuse the package cache. They are not run in this vignette so that the
+article remains deterministic and safe to build offline.
+
+For a reproducible analysis, persist the release catalogue row and the
+`raw_sha256` value returned in the provenance columns. For a fully offline
+workflow, retain the downloaded file and use the corresponding `*_file()`
+reader as shown above.
+
+## What to check next
+
+Before analysing values, check the family-specific identifiers and the
+provenance fields. In particular:
+
+* IVI `series_type`, occupation fields, and geography fields describe the
+  workbook sheet that was parsed.
+* REOS `table`, `series`, `disaggregation_group`, and `disaggregation` retain
+  the workbook metadata needed to interpret a percentage.
+* SALM `classification_version` records the ASGS vintage stated by the file,
+  and `file_notes` retains the publisher's availability note.
+
+All three readers validate the expected schema and raise an error when a file
+is missing, malformed, or no longer matches the supported publication shape.
+The [source families](source-families.html) article shows how to inspect the
+catalogue and choose among the supported layouts; the
+[reproducibility and cache](reproducibility-and-cache.html) article shows an
+offline cache replay; and [troubleshooting](troubleshooting.html) demonstrates
+the main failure classes.

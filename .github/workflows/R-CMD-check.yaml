@@ -1,0 +1,74 @@
+name: R-CMD-check
+
+on:
+  push:
+    branches-ignore:
+      - gh-pages
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source-layout:
+    name: Source-layout tests
+    runs-on: ubuntu-latest
+    env:
+      READJSA_LIVE: "false"
+      READJSA_VALIDATE_LIVE: "false"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: r-lib/actions/setup-r@d3c5be51b12e724e68f33216ca3c148b66d5f0b6 # v2
+        with:
+          r-version: release
+
+      - uses: r-lib/actions/setup-r-dependencies@d3c5be51b12e724e68f33216ca3c148b66d5f0b6 # v2
+        with:
+          dependencies: '"all"'
+          needs: check
+
+      - name: Test the source layout, including repository-only checks
+        run: Rscript -e 'testthat::test_local(".", reporter = "summary")'
+
+  check:
+    name: ${{ matrix.os }} / R ${{ matrix.r }}
+    needs: source-layout
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: ubuntu-latest, r: release}
+          - {os: ubuntu-latest, r: oldrel-1}
+          - {os: ubuntu-latest, r: devel}
+          - {os: macos-latest, r: release}
+          - {os: windows-latest, r: release}
+    env:
+      READJSA_LIVE: "false"
+      READJSA_VALIDATE_LIVE: "false"
+      R_KEEP_PKG_SOURCE: yes
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: r-lib/actions/setup-r@d3c5be51b12e724e68f33216ca3c148b66d5f0b6 # v2
+        with:
+          r-version: ${{ matrix.r }}
+
+      - uses: r-lib/actions/setup-r-dependencies@d3c5be51b12e724e68f33216ca3c148b66d5f0b6 # v2
+        with:
+          dependencies: '"all"'
+          needs: check
+          extra-packages: any::rcmdcheck
+
+      - uses: r-lib/actions/check-r-package@d3c5be51b12e724e68f33216ca3c148b66d5f0b6 # v2
+        with:
+          build_args: 'c("--no-manual", "--compact-vignettes=gs+qpdf")'
+          args: 'c("--no-manual", "--as-cran")'
+          error-on: '"warning"'
+          upload-snapshots: true

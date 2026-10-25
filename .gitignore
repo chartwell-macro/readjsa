@@ -1,0 +1,22 @@
+# R and IDE state
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+
+# Local build and check output
+.Rcheck/
+*.Rcheck/
+*.tar.gz
+
+# Locally rendered pkgdown output
+docs/
+pkgdown/
+
+# Local coverage output
+coverage.rds
+coverage.xml
+coverage.html/
+
+# Dependency lockfile generated transiently by r-lib/actions
+.github/pkg.lock

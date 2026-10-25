@@ -1,0 +1,13 @@
+citHeader("To cite readjsa in publications use:")
+
+bibentry(
+  bibtype = "Manual",
+  title = "readjsa: Access Jobs and Skills Australia Data",
+  author = c(
+    person("Chartwell", "Macro"),
+    person("Matt", "Cowgill")
+  ),
+  year = "2026",
+  note = "R package version 0.1.0; current-fork code copyright Chartwell Macro",
+  url = "https://github.com/chartwell-macro/readjsa"
+)

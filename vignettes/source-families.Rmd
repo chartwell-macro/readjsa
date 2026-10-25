@@ -1,0 +1,152 @@
+---
+title: "Choosing a readjsa source family"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Choosing a readjsa source family}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  prompt = FALSE
+)
+library(readjsa)
+
+fixture <- function(name) {
+  installed <- system.file("extdata", name, package = "readjsa")
+  candidates <- c(
+    installed,
+    file.path("..", "inst", "extdata", name),
+    file.path("inst", "extdata", name)
+  )
+  path <- candidates[nzchar(candidates) & file.exists(candidates)]
+  if (!length(path)) stop("The packaged fixture is missing: ", name)
+  path[[1L]]
+}
+
+ivi_html <- fixture("ivi.html")
+reos_html <- fixture("reos.html")
+salm_html <- fixture("salm.html")
+```
+
+The current release catalogue is the contract between a publisher's page and
+the parser. `jsa_release_manifest()` lists the supported dataset/family pairs
+and the classification context that the parser will attach to observations.
+
+```{r manifest}
+jsa_release_manifest()
+```
+
+The manifest is deliberately more specific than a dataset name. IVI has six
+layouts:
+
+* `skill_states` — skill levels by state or territory;
+* `anzsco4_states` — four-digit ANZSCO occupations by state or territory;
+* `anzsco2_states` — two-digit ANZSCO occupations by state or territory;
+* `anzsco2_ivi_regions` — two-digit ANZSCO occupations by JSA IVI region;
+* `anzsco2_gccsa_sa4` — two-digit ANZSCO occupations by GCCSA/SA4; and
+* `anzsco4_remoteness_northern` — four-digit ANZSCO occupations by JSA
+  Remoteness and Northern Australia.
+
+REOS is represented by the `reos_tables` family because its workbook's
+`Information` sheet defines the table metadata. SALM has separate `salm_sa2`
+and `salm_lga` families because their geography identifiers and ASGS vintages
+are different. A family is not a cosmetic label: it selects the schema that
+will be validated.
+
+## Discover a catalogue without a network call
+
+`discover_jsa_releases()` normally reads an official HTTPS publication page.
+For tests and reproducible examples it accepts HTML text or a local HTML path.
+The packaged pages below are deterministic shape fixtures, not live snapshots
+of the publishers' production pages.
+
+```{r offline-discovery}
+ivi_catalogue <- discover_jsa_releases("ivi", html = ivi_html)
+reos_catalogue <- discover_jsa_releases("reos", html = reos_html)
+salm_catalogue <- discover_jsa_releases(
+  "salm",
+  html = salm_html,
+  resource_html = list(
+    salm_sa2 = fixture("salm_sa2_resource.html"),
+    salm_lga = fixture("salm_lga_resource.html")
+  )
+)
+
+catalogue_summary <- rbind(
+  ivi = data.frame(dataset = "ivi", families = nrow(ivi_catalogue)),
+  reos = data.frame(dataset = "reos", families = nrow(reos_catalogue)),
+  salm = data.frame(dataset = "salm", families = nrow(salm_catalogue)),
+  stringsAsFactors = FALSE
+)
+catalogue_summary
+```
+
+The returned catalogue includes `source_url`, `source_filename`, reference
+dates and, where the publisher page exposes them, release/vintage dates. It
+also includes publication and terms URLs, licence text, and attribution.
+The default `strict = TRUE` refuses a partial or ambiguous catalogue. That is
+intentional: selecting "the first link" could silently mix families or
+vintages. If a publisher changes its page, inspect the error and update the
+catalogue handling rather than guessing a URL.
+
+```{r catalogue-identities}
+ivi_catalogue[c("family_id", "reference_period", "source_filename")]
+reos_catalogue[c("family_id", "reference_period", "source_filename")]
+salm_catalogue[c("family_id", "reference_period", "source_filename")]
+```
+
+## Parse the corresponding local shapes
+
+The fixture workbooks and CSV demonstrate the parser entry points without
+contacting a server. Real releases use the same family-specific entry points,
+but their row counts and values change with each publication vintage.
+
+```{r family-shapes}
+ivi_skill <- read_ivi_file(
+  fixture("ivi_skill_states.xlsx"), family = "skill_states"
+)
+reos_tables <- read_reos_file(
+  fixture("reos_current.xlsx"), tables = c("1.1", "3.3")
+)
+salm_sa2 <- read_salm_file(fixture("salm_sa2.csv"), geography = "sa2")
+
+data.frame(
+  family = c("skill_states", "reos_tables", "salm_sa2"),
+  rows = c(nrow(ivi_skill), nrow(reos_tables), nrow(salm_sa2)),
+  columns = c(ncol(ivi_skill), ncol(reos_tables), ncol(salm_sa2)),
+  stringsAsFactors = FALSE
+)
+```
+
+Use the fields retained by each parser rather than reconstructing source
+meaning from column positions. For example, `classification_version` and
+`geography_type` are the explicit geography/classification contract, while
+`source_filename`, `raw_bytes`, and `raw_sha256` identify the exact file that
+was parsed.
+
+```{r family-columns}
+list(
+  ivi = c(
+    "series_type", "occupation_level", "occupation_code",
+    "occupation_title", "geography_type", "geography_code"
+  ),
+  reos = c(
+    "table", "series", "frequency", "unit", "table_title",
+    "table_definition", "disaggregation_group", "disaggregation"
+  ),
+  salm = c(
+    "geography_type", "geography_code", "geography_name", "data_item",
+    "classification_version", "observation_status"
+  )
+)
+```
+
+When you need a current release, use `read_ivi()`, `read_reos()`, or
+`read_salm()` with the family/table/geography selection. When you need an
+offline or pinned replay, save the catalogue row, fetch the raw file once, and
+call the corresponding `*_file()` parser with the saved provenance. The next
+article demonstrates that pattern without using a live endpoint.

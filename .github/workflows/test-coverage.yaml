@@ -1,0 +1,58 @@
+name: test-coverage
+
+on:
+  push:
+    branches-ignore:
+      - gh-pages
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  coverage:
+    name: Linux coverage
+    runs-on: ubuntu-latest
+    env:
+      READJSA_LIVE: "false"
+      READJSA_SOURCE_ROOT: ${{ github.workspace }}
+      READJSA_VALIDATE_LIVE: "false"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: r-lib/actions/setup-r@d3c5be51b12e724e68f33216ca3c148b66d5f0b6 # v2
+        with:
+          r-version: release
+
+      - uses: r-lib/actions/setup-r-dependencies@d3c5be51b12e724e68f33216ca3c148b66d5f0b6 # v2
+        with:
+          dependencies: '"all"'
+          needs: check
+          extra-packages: any::covr
+
+      - name: Run offline coverage
+        run: >-
+          Rscript -e
+          'coverage <- covr::package_coverage();
+          print(coverage);
+          saveRDS(coverage, "coverage.rds")'
+
+      - name: Upload coverage when available
+        continue-on-error: true
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        run: |
+          Rscript -e '
+            coverage <- readRDS("coverage.rds")
+            tryCatch(
+              covr::codecov(coverage = coverage),
+              error = function(error) {
+                message("Coverage upload skipped: ", conditionMessage(error))
+              }
+            )
+          '

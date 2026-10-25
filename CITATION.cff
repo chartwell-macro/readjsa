@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "If you use readjsa, please cite it using the metadata below."
+title: "readjsa: Access Jobs and Skills Australia Data"
+type: software
+abstract: >-
+  R access to supported Jobs and Skills Australia and Department of
+  Employment and Workplace Relations releases. Current-fork package-code
+  contributions are MIT licensed and copyright Chartwell Macro; official source data
+  and preserved upstream material remain subject to their respective rights
+  and terms.
+authors:
+  - family-names: "Macro"
+    given-names: "Chartwell"
+  - family-names: "Cowgill"
+    given-names: "Matt"
+    orcid: "https://orcid.org/0000-0003-0422-3300"
+version: "0.1.0"
+license: "MIT"
+repository-code: "https://github.com/chartwell-macro/readjsa"
+url: "https://chartwell-macro.github.io/readjsa"

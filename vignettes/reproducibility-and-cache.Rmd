@@ -1,0 +1,159 @@
+---
+title: "Reproducible offline reads and the raw-file cache"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Reproducible offline reads and the raw-file cache}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  prompt = FALSE
+)
+library(readjsa)
+
+fixture <- function(name) {
+  installed <- system.file("extdata", name, package = "readjsa")
+  candidates <- c(
+    installed,
+    file.path("..", "inst", "extdata", name),
+    file.path("inst", "extdata", name)
+  )
+  path <- candidates[nzchar(candidates) & file.exists(candidates)]
+  if (!length(path)) stop("The packaged fixture is missing: ", name)
+  path[[1L]]
+}
+```
+
+`readjsa` treats a raw release and its metadata as one reproducibility unit.
+The cache key includes the release identity, parser version, and schema
+version. A cache hit is accepted only after the file size, SHA-256, metadata,
+official final URL, parser/schema versions, and age bounds are checked. The
+default cache location is returned by `jsa_cache_dir()` and is managed with
+`tools::R_user_dir()`.
+
+```{r cache-location}
+cache_path <- jsa_cache_dir()
+stopifnot(is.character(cache_path), length(cache_path) == 1L, nzchar(cache_path))
+cat("A platform-specific user cache path was returned.\n")
+```
+
+Local file reads do not need the cache. They still attach the exact local byte
+count and SHA-256, so a report can record what was parsed.
+
+```{r local-provenance}
+local_ivi <- read_ivi_file(
+  fixture("ivi_skill_states.xlsx"), family = "skill_states"
+)
+local_ivi[1, c(
+  "family_id", "source_filename", "raw_bytes", "raw_sha256",
+  "parser_version", "schema_version", "revision_policy"
+)]
+```
+
+## Exercise a cache replay offline
+
+The following example uses a custom transport that copies a packaged fixture
+instead of opening a network connection. It still calls the real
+`fetch_jsa_release()` cache implementation: the source URL is an official
+HTTPS URL from the offline catalogue, the copied bytes are hashed, and the
+second call must revalidate the cached pair without invoking the transport.
+
+```{r offline-cache}
+ivi_catalogue <- discover_jsa_releases(
+  "ivi", html = fixture("ivi.html")
+)
+release <- ivi_catalogue[
+  ivi_catalogue$family_id == "skill_states", , drop = FALSE
+]
+
+run_cache_demo <- function(release, source_file) {
+  cache_dir <- tempfile("readjsa-cache-")
+  dir.create(cache_dir)
+  on.exit(unlink(cache_dir, recursive = TRUE), add = TRUE)
+
+  transport_calls <- 0L
+  transport <- function(url, destination, timeout, max_bytes) {
+    transport_calls <<- transport_calls + 1L
+    if (!file.copy(source_file, destination, overwrite = TRUE)) {
+      stop("fixture transport could not create the destination")
+    }
+    invisible(url)
+  }
+
+  first <- fetch_jsa_release(
+    release, cache_dir = cache_dir, transport = transport
+  )
+  second <- fetch_jsa_release(
+    release, cache_dir = cache_dir, transport = transport
+  )
+
+  provenance_fields <- c(
+    "provider_id", "dataset_id", "family_id", "release_id",
+    "reference_period", "release_date", "vintage_date",
+    "page_modified_date", "retrieved_at", "source_url", "final_url",
+    "source_filename", "page_url", "raw_bytes", "raw_sha256",
+    "parser_version", "schema_version", "revision_policy", "terms_url",
+    "licence", "attribution"
+  )
+  parsed <- read_ivi_file(
+    first$path,
+    family = first$family_id,
+    provenance = first[intersect(names(first), provenance_fields)]
+  )
+
+  list(
+    cache = data.frame(
+      transport_calls = transport_calls,
+      first_cache_hit = first$cache_hit,
+      second_cache_hit = second$cache_hit,
+      raw_bytes = first$raw_bytes,
+      sha256_prefix = substr(first$raw_sha256, 1L, 12L),
+      stringsAsFactors = FALSE
+    ),
+    parsed = data.frame(
+      rows = nrow(parsed),
+      first_date = min(parsed$date),
+      last_date = max(parsed$date),
+      source_filename = parsed$source_filename[[1L]],
+      stringsAsFactors = FALSE
+    )
+  )
+}
+
+cache_demo <- run_cache_demo(
+  release,
+  fixture("ivi_skill_states.xlsx")
+)
+cache_demo$cache
+cache_demo$parsed
+```
+
+The expected pattern is one transport call, `FALSE` for the first cache-hit
+flag, and `TRUE` for the second. The SHA-256 prefix is shown only to keep the
+article compact; production records should retain the complete hash. The
+temporary cache is deleted at the end of the chunk, so this demonstration does
+not alter a user's persistent cache.
+
+High-level readers normally return no cache-diagnostic attribute. For an
+instrumented run, set `READJSA_MEASUREMENT_CACHE_AUDIT=true`; the result then
+has a logical `readjsa_raw_cache_hits` attribute with one observed outcome per
+fetched release. This opt-in attribute does not add or reorder data-frame
+columns. Unset the variable for ordinary workflows.
+
+## Pinning a replay
+
+For a report or pipeline, save at least the selected catalogue row and the
+complete `raw_sha256` from the parsed output. The row identifies the provider,
+dataset/family, reference period, source URL and terms; the hash identifies the
+exact bytes. Re-running `read_*()` later may discover a newer release, whereas
+replaying the saved raw file with `read_*_file()` preserves the original
+vintage.
+
+The cache is a convenience, not a data archive. It has bounded age, file count,
+and total bytes, and a changed parser or schema version invalidates a hit. Keep
+durable raw files and catalogue records outside the cache when long-term audit
+or publication reproducibility is required.
